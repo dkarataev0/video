@@ -403,7 +403,7 @@ class Project:
         for old in (self.dir / "output").glob("test_*.mp4"):
             if old.name != "test_video.mp4":
                 old.unlink()
-        concat_and_mux([vid], part, out, self.state["settings"]["label_text"])
+        concat_and_mux([vid], part, out, self.state["settings"]["label_text"], (b - a) / fps)
         self.state["test"] = str(out)
 
     def full_job(self, regen_range: tuple[float, float] | None = None, what: str = "all"):
@@ -446,7 +446,7 @@ class Project:
         for old in (self.dir / "output").glob("result_*.mp4"):
             old.unlink()
         concat_and_mux([self.p("render", f"seg_{i:04d}.mp4") for i, _, _ in segs], aud, out,
-                       self.state["settings"]["label_text"])
+                       self.state["settings"]["label_text"], self.meta["frames"] / fps)
         self.state["result"] = str(out)
 
     # ---------------------------------------------------------------- privacy

@@ -193,12 +193,17 @@ def apply_label(frame: np.ndarray, overlay) -> np.ndarray:
 
 
 # ---------------------------------------------------------------- final assembly
-def concat_and_mux(segment_files: list[Path], audio_wav: Path | None, out_path: Path, label_text: str):
+def concat_and_mux(segment_files: list[Path], audio_wav: Path | None, out_path: Path, label_text: str,
+                   duration: float | None = None):
+    """duration = exact video length (frames / fps). '-shortest' is not used: it can drop the
+    last video frames; '-t' cuts both streams precisely instead."""
     lst = out_path.with_suffix(".txt")
     lst.write_text("".join(f"file '{p.resolve()}'\n" for p in segment_files))
     cmd = ["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(lst)]
     if audio_wav is not None and Path(audio_wav).exists():
-        cmd += ["-i", str(audio_wav), "-map", "0:v:0", "-map", "1:a:0", "-c:a", "aac", "-b:a", "192k", "-shortest"]
+        cmd += ["-i", str(audio_wav), "-map", "0:v:0", "-map", "1:a:0", "-c:a", "aac", "-b:a", "192k"]
+        if duration:
+            cmd += ["-t", f"{duration:.6f}"]
     cmd += ["-c:v", "copy", "-movflags", "+faststart",
             "-metadata", f"comment={label_text}. AI-modified video (face swap / voice conversion).",
             "-metadata", "description=AI-generated / modified with AI", str(out_path)]
