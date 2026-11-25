@@ -360,14 +360,18 @@ def main():
         user, pwd = a.auth.split(":", 1)
     else:
         user, pwd = "studio", secrets.token_urlsafe(8)
-    print("=" * 60)
-    print(f"ЛОГИН: {user}\nПАРОЛЬ: {pwd}")
-    print("=" * 60, flush=True)
     demo = build()
     demo.queue(default_concurrency_limit=4).launch(
         share=a.share, server_name="0.0.0.0", server_port=a.port, auth=(user, pwd),
-        allowed_paths=[str(HOME)], max_file_size="2gb", show_api=False)
-
+        allowed_paths=[str(HOME)], max_file_size="2gb", show_api=False, prevent_thread_lock=True)
+    url = getattr(demo, "share_url", None) or f"http://127.0.0.1:{a.port}"
+    bar = "=" * 64
+    print(f"\n{bar}\n  ГОТОВО! Откройте в Safari ссылку:\n\n  {url}\n\n"
+          f"  ЛОГИН:  {user}\n  ПАРОЛЬ: {pwd}\n\n"
+          f"  Не останавливайте эту ячейку и не закрывайте вкладку Kaggle.\n{bar}\n", flush=True)
+    if a.share and not getattr(demo, "share_url", None):
+        print("⚠️ Публичная ссылка не создалась: проверьте, что в Settings включён Internet, и перезапустите ячейку.")
+    demo.block_thread()
 
 if __name__ == "__main__":
     main()
