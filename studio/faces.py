@@ -483,14 +483,20 @@ class HairRecolor:
             return frame
         # recolor statistics from hair pixels only
         lab = cv2.cvtColor(crop, cv2.COLOR_BGR2LAB).astype(np.float32)
-        med = float(np.median(lab[..., 0][hair_px]))
+        L = lab[..., 0]
+        med = float(np.median(L[hair_px]))
         target = 118.0 * self.c["l"] + 20
-        L2 = (lab[..., 0] - med) * 1.0 + target  # keep full strand contrast
-        sat = np.clip(L2 / 140.0, 0.35, 1.1)
+        # grey hair has little contrast: amplify strand detail (high-pass) so it doesn't look like a cap
+        detail = L - cv2.GaussianBlur(L, (0, 0), 4)
+        L2 = target + (cv2.GaussianBlur(L, (0, 0), 4) - med) * 0.8 + detail * 1.6
+        sat = np.clip(L2 / 140.0, 0.3, 1.05)
+        # small per-pixel hue variation from the original texture keeps it natural
+        var = np.clip(detail / 25.0, -0.25, 0.25)
         lab[..., 0] = np.clip(L2, 0, 255)
-        lab[..., 1] = 128 + self.c["a"] * sat + (lab[..., 1] - 128) * 0.25
-        lab[..., 2] = 128 + self.c["b"] * sat + (lab[..., 2] - 128) * 0.25
+        lab[..., 1] = 128 + self.c["a"] * sat * (1 + var) + (lab[..., 1] - 128) * 0.3
+        lab[..., 2] = 128 + self.c["b"] * sat * (1 - var) + (lab[..., 2] - 128) * 0.3
         colored = cv2.cvtColor(lab.clip(0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
-        soft = cv2.GaussianBlur(mask, (0, 0), 3).clip(0, 1) * self.strength
+        # soft hairline: wider feather and partial strength where the parser is unsure
+        soft = cv2.GaussianBlur(np.clip((mask - 0.2) / 0.6, 0, 1), (0, 0), 6).clip(0, 1) * self.strength
         edge = box_mask(512, 0.15)  # fade at crop borders so the paste has no seams
         return paste_back(frame, colored, np.minimum(soft, edge), m)
