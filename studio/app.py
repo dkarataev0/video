@@ -21,7 +21,12 @@ from .pipeline import Busy, Project  # noqa: E402
 P = Project()
 
 CSS = """
-.gradio-container {max-width: 760px !important; margin: auto;}
+html, body {overflow-x: hidden; max-width: 100vw;}
+.gradio-container {max-width: min(760px, 100vw) !important; min-width: 0 !important; width: 100% !important;
+                   margin: auto; padding: 0 12px !important; box-sizing: border-box;}
+.gradio-container * {min-width: 0;}
+.tab-wrapper, .tab-container {flex-wrap: wrap !important; height: auto !important;}
+.tab-container button {flex: 0 0 auto;}
 #progress {height: 14px; background: #e5e7eb; border-radius: 7px; overflow: hidden;}
 #progress > div {height: 100%; background: linear-gradient(90deg,#6366f1,#22c55e); transition: width .5s;}
 .slot {border: 1px solid #e5e7eb; border-radius: 12px; padding: 8px;}
@@ -104,15 +109,23 @@ def on_video(file, consent):
     gr.Info("Видео загружено, начат анализ. Можно заблокировать телефон — работа продолжится.")
 
 
-def on_face(i):
-    def f(files):
-        P.set_face_photos(i, files)
+def on_face(i, clear=False):
+    def f(files=None):
+        if P.running:
+            raise gr.Error("Дождитесь окончания текущей задачи, затем меняйте фото.")
+        P.set_face_photos(i, None if clear else files)
+        if not clear:
+            gr.Info(f"Фото для персонажа {i + 1} сохранены.")
     return f
 
 
-def on_voice(i):
-    def f(files):
-        P.set_voice_files(i, files)
+def on_voice(i, clear=False):
+    def f(files=None):
+        if P.running:
+            raise gr.Error("Дождитесь окончания текущей задачи, затем меняйте образцы.")
+        P.set_voice_files(i, None if clear else files)
+        if not clear:
+            gr.Info(f"Образец для голоса {i + 1} сохранён.")
     return f
 
 
@@ -214,7 +227,8 @@ def on_wipe(confirm):
 def build():
     global N_PANEL_OUT
     s = P.state["settings"]
-    with gr.Blocks(title="AI Video Studio", css=CSS, theme=gr.themes.Soft()) as demo:
+    with gr.Blocks(title="AI Video Studio", css=CSS, theme=gr.themes.Soft(font=["-apple-system", "system-ui", "Segoe UI", "Roboto", "sans-serif"],
+                                                                    font_mono=["ui-monospace", "Menlo", "monospace"])) as demo:
         gr.Markdown("## 🎬 AI Video Studio\nЗамена лиц и голосов с согласия участников. "
                     "Итог всегда помечается как созданный ИИ.")
         consent = gr.Checkbox(label=CONSENT_TEXT, value=bool(P.state.get("consent")))
@@ -235,12 +249,13 @@ def build():
             for i in range(MAX_CHARACTERS):
                 with gr.Group(visible=False, elem_classes="slot") as g:
                     with gr.Row():
-                        img = gr.Image(label=f"Персонаж {i + 1}", interactive=False, height=150, width=150,
-                                       show_download_button=False)
-                        with gr.Column():
+                        img = gr.Image(label=f"Персонаж {i + 1}", interactive=False, height=150,
+                                       show_download_button=False, min_width=120)
+                        with gr.Column(min_width=180):
                             lbl = gr.Markdown()
                             up = gr.File(label="Фото нового лица", file_count="multiple", file_types=["image"])
-                    up.change(on_face(i), up, None)
+                    up.upload(on_face(i), up, None)
+                    up.clear(on_face(i, clear=True), None, None)
                 char_groups.append(g)
                 char_imgs.append(img)
                 char_lbls.append(lbl)
@@ -260,7 +275,8 @@ def build():
                     lbl = gr.Markdown()
                     au = gr.Audio(label=f"Как звучит голос {i + 1} в видео", interactive=False, type="filepath")
                     up = gr.File(label="Образец нового голоса", file_count="multiple", file_types=["audio", "video"])
-                    up.change(on_voice(i), up, None)
+                    up.upload(on_voice(i), up, None)
+                    up.clear(on_voice(i, clear=True), None, None)
                 spk_groups.append(g)
                 spk_audio.append(au)
                 spk_lbls.append(lbl)
@@ -290,7 +306,7 @@ def build():
                                label="Положение пометки «Создано с помощью ИИ»")
         settings = [swapper, boost, weight, enh, occl, defl, steps, inton, semi, clean, lpos]
 
-        with gr.Tab("5. Тест и результат"):
+        with gr.Tab("5. Результат"):
             with gr.Row():
                 tstart = gr.Number(label="Тест: начало фрагмента, с", value=0)
                 btest = gr.Button("▶️ Тест 5 секунд", variant="secondary")

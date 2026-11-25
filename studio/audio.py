@@ -93,7 +93,7 @@ def _speaker_model():
 
         ckpt = hf_hub_download("funasr/campplus", "campplus_cn_common.bin", cache_dir=str(MODELS_DIR / "hf"))
         m = CAMPPlus(feat_dim=80, embedding_size=192)
-        m.load_state_dict(torch.load(ckpt, map_location="cpu"))
+        m.load_state_dict(torch.load(ckpt, map_location="cpu", weights_only=True))
         dev = "cuda" if torch.cuda.is_available() else "cpu"
         _spk = (m.eval().to(dev), dev)
     return _spk
