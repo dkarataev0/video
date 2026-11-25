@@ -1,0 +1,23 @@
+# Installed by install.py (torch from the cu124 index). Pinned set tested together.
+torch==2.5.1
+torchvision==0.20.1
+torchaudio==2.5.1
+numpy>=2,<2.3
+transformers==4.46.3
+librosa>=0.10.2
+munch==4.0.0
+einops>=0.8.0
+scipy>=1.13
+soundfile>=0.12.1
+huggingface_hub>=0.28.1
+matplotlib
+pydub
+insightface==2.1
+audio-separator==0.48.0
+silero-vad==6.3
+gradio==5.50.0
+scikit-learn
+opencv-python
+pillow-heif
+onnx
+onnxruntime-gpu==1.22.0
