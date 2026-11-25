@@ -244,8 +244,8 @@ def build_render_plan(tracks: list[Track], n_frames: int, fps: float, smooth: in
 
 
 # ------------------------------------------------------------------ analysis entry point
-def analyze(reader, n_frames: int, fps: float, min_px: int, progress=None) -> dict:
-    det = FaceDetector()
+def analyze(reader, n_frames: int, fps: float, min_px: int, progress=None, det_thresh: float = 0.35) -> dict:
+    det = FaceDetector(det_thresh=det_thresh)  # low threshold keeps faces half out of frame (zooms)
     dets_per_frame = []
     for t, frame in enumerate(reader):
         dets_per_frame.append(det.detect(frame, min_px=min_px))

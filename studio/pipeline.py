@@ -145,7 +145,8 @@ class Project:
         self.save()
         fps = float(self.fps)
         reader = FrameReader(self.p("norm.mp4"), meta["width"], meta["height"], self.fps)
-        data = F.analyze(reader, meta["frames"], fps, int(st["settings"]["min_face_px"]), self.sub(0.05, 0.55))
+        data = F.analyze(reader, meta["frames"], fps, int(st["settings"]["min_face_px"]), self.sub(0.05, 0.55),
+                         float(st["settings"].get("det_thresh", 0.35)))
         F.save_tracks(self.p("tracks.pkl"), data)
         self._tracks_cache = data
         self.recluster(0.55, save_only=True)
@@ -262,15 +263,17 @@ class Project:
     def face_signature(self) -> str:
         s = self.state["settings"]
         photos = {k: _hash_files(v) for k, v in self.state["face_photos"].items()}
-        return _sig([{k: s[k] for k in self.FACE_KEYS}, photos, self.state.get("cluster_threshold")])
+        return _sig([{k: s[k] for k in self.FACE_KEYS}, photos, self.state.get("cluster_threshold"),
+                     s.get("per_character")])
 
     def _render_frames(self, start: int, end: int, out_path: Path, ctx: dict, progress=None):
         meta = self.meta
         w0 = max(0, start - WARMUP)
         reader = FrameReader(self.p("norm.mp4"), meta["width"], meta["height"], self.fps, start=w0, count=end - w0)
         writer = FrameWriter(out_path, meta["width"], meta["height"], self.fps, int(self.state["settings"]["crf"]))
-        swapper, plan, vecs = ctx["swapper"], ctx["plan"], ctx["vecs"]
-        swapper.reset()
+        swappers, plan, vecs = ctx["swappers"], ctx["plan"], ctx["vecs"]
+        for sw in ctx["pool"]:
+            sw.reset()
         n = 0
         try:
             for i, frame in enumerate(reader):
@@ -279,7 +282,7 @@ class Project:
                     break
                 for tid, char, kps, _ in plan[t] if t < len(plan) else []:
                     if tid in vecs:
-                        frame = swapper.swap(frame, t, tid, kps, vecs[tid])
+                        frame = swappers[tid].swap(frame, t, tid, kps, vecs[tid])
                 if t >= start:
                     writer.write(apply_label(frame, ctx["label"]))
                     n += 1
@@ -291,18 +294,31 @@ class Project:
             raise RuntimeError(f"Прочитано {n} кадров вместо {end - start} (ошибка декодирования).")
 
     def _video_context(self) -> dict:
+        """Per-character overrides (settings["per_character"] = {"0": {"swapper": ..., "face_weight": ...}})
+        let e.g. one person use InSwapper with stronger identity while others keep HyperSwap."""
         s = self.state["settings"]
         data = self.tracks()
         plan = F.build_render_plan(data["tracks"], self.meta["frames"], float(self.fps), int(s["landmark_smoothing"]))
-        vecs = {}
-        swapper = F.FaceSwapper(s)
+        overrides = s.get("per_character") or {}
+        pool: dict[str, F.FaceSwapper] = {}
+
+        def swapper_for(char: int) -> F.FaceSwapper:
+            cfg = {**s, **overrides.get(str(char), {})}
+            key = json.dumps({k: cfg[k] for k in self.FACE_KEYS if k in cfg}, sort_keys=True, default=str)
+            if key not in pool:
+                pool[key] = F.FaceSwapper(cfg)
+            return pool[key]
+
+        vecs, swappers = {}, {}
         if self.state["face_photos"]:
             idents = self._identities(F.FaceDetector())
             for tr in data["tracks"]:
                 if tr.character in idents:
-                    vecs[tr.tid] = swapper.source_vector(idents[tr.character], tr.mean_emb())
+                    sw = swapper_for(tr.character)
+                    swappers[tr.tid] = sw
+                    vecs[tr.tid] = sw.source_vector(idents[tr.character], tr.mean_emb())
         label = make_label_overlay(self.meta["width"], self.meta["height"], s["label_text"], s["label_position"])
-        return {"swapper": swapper, "plan": plan, "vecs": vecs, "label": label}
+        return {"swappers": swappers, "pool": list(pool.values()), "plan": plan, "vecs": vecs, "label": label}
 
     def _segments(self):
         n, per = self.meta["frames"], max(1, round(SEGMENT_SECONDS * float(self.fps)))

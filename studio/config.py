@@ -66,6 +66,7 @@ DEFAULT_SETTINGS = {
     "deflicker": 0.5,           # 0..1 temporal stabilisation strength
     "landmark_smoothing": 2,    # Savitzky-Golay half-window (frames); 0 = off
     "min_face_px": 40,
+    "det_thresh": 0.35,         # lower = finds faces partly outside the frame / in profile
     # voices
     "vc_steps": 30,
     "vc_cfg_rate": 0.7,
