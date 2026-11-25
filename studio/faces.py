@@ -16,7 +16,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .config import FACE_MODELS, MODELS_DIR, WARP_TEMPLATES
+from .config import FACE_MODELS, HAIR_COLORS, MODELS_DIR, WARP_TEMPLATES
 from .models import face_model_path, providers, session
 
 
@@ -95,6 +95,36 @@ class FaceDetector:
             out.append({"bbox": f.bbox.astype(np.float32), "kps": f.kps.astype(np.float32),
                         "score": float(f.det_score), "emb": emb, "nemb": emb / (np.linalg.norm(emb) + 1e-9)})
         return out
+
+    def detect_edges(self, img: np.ndarray, min_px: int = 0) -> list[dict]:
+        """Normal detection + a second pass on a frame extended by mirror padding, which recovers
+        faces cut by the left/right frame edge (camera zooms/pans). Only edge faces are added."""
+        faces = self.detect(img, min_px)
+        h, w = img.shape[:2]
+        pad = w // 5
+        big = cv2.copyMakeBorder(img, 0, 0, pad, pad, cv2.BORDER_REFLECT)
+        for d in self.detect(big, min_px):
+            d["bbox"] = d["bbox"] - np.array([pad, 0, pad, 0], np.float32)
+            d["kps"] = d["kps"] - np.array([pad, 0], np.float32)
+            x1, _, x2, _ = d["bbox"]
+            fw, cx = x2 - x1, (x1 + x2) / 2
+            at_edge = (x1 < 0 and cx > -fw * 0.5) or (x2 > w and cx < w + fw * 0.5)
+            if at_edge and all(iou(d["bbox"], f["bbox"]) < 0.3 for f in faces):
+                d["edge"] = True
+                faces.append(d)
+        return faces
+
+    def central(self, img: np.ndarray):
+        """Face for a reference photo: among faces at least half the size of the largest one,
+        the one nearest to the image centre (so cropped group photos pick the intended person)."""
+        faces = self.detect(img)
+        if not faces:
+            return None
+        area = lambda d: (d["bbox"][2] - d["bbox"][0]) * (d["bbox"][3] - d["bbox"][1])
+        big = max(area(d) for d in faces)
+        c = np.array(img.shape[1::-1], np.float32) / 2
+        cand = [d for d in faces if area(d) >= big * 0.5]
+        return min(cand, key=lambda d: np.linalg.norm((d["bbox"][:2] + d["bbox"][2:]) / 2 - c))
 
     def largest(self, img: np.ndarray):
         faces = self.detect(img)
@@ -248,7 +278,7 @@ def analyze(reader, n_frames: int, fps: float, min_px: int, progress=None, det_t
     det = FaceDetector(det_thresh=det_thresh)  # low threshold keeps faces half out of frame (zooms)
     dets_per_frame = []
     for t, frame in enumerate(reader):
-        dets_per_frame.append(det.detect(frame, min_px=min_px))
+        dets_per_frame.append(det.detect_edges(frame, min_px=min_px))
         if progress and t % 10 == 0:
             progress(t / max(1, n_frames), f"Поиск лиц: кадр {t}/{n_frames}")
     tracks = build_tracks(dets_per_frame, fps)
@@ -296,13 +326,13 @@ def source_identity(det: FaceDetector, image_paths: list[str]) -> dict | None:
         s = 1600 / max(img.shape[:2])
         if s < 1:
             img = cv2.resize(img, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)
-        f = det.largest(img)
+        f = det.central(img)
         if f is None:  # very tight crops/close-up selfies: give the detector some context
             pad = max(img.shape[:2]) // 2
             img = cv2.copyMakeBorder(img, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=(127, 127, 127))
             if max(img.shape[:2]) < 640:
                 img = cv2.resize(img, None, fx=640 / max(img.shape[:2]), fy=640 / max(img.shape[:2]))
-            f = det.largest(img)
+            f = det.central(img)
         if f is None:
             continue
         embs.append(f["emb"])
@@ -337,6 +367,8 @@ class FaceSwapper:
         self.box = box_mask(self.boost, float(settings.get("mask_blur", 0.3)))
         self.box512 = box_mask(512, float(settings.get("mask_blur", 0.3)))
         self.prev: dict[int, tuple[int, np.ndarray]] = {}
+        hair = settings.get("hair_color")
+        self.hair = HairRecolor(hair, float(settings.get("hair_strength", 0.9))) if hair in HAIR_COLORS else None
 
     # --- embeddings
     def source_vector(self, ident: dict, target_nemb: np.ndarray) -> np.ndarray:
@@ -388,6 +420,8 @@ class FaceSwapper:
     # --- public
     def reset(self):
         self.prev.clear()
+        if self.hair is not None:
+            self.hair.prev.clear()
 
     def swap(self, frame: np.ndarray, t: int, track_id: int, kps: np.ndarray, src_vec: np.ndarray) -> np.ndarray:
         crop, m = warp(frame, kps, "arcface_128", self.boost)
@@ -411,4 +445,52 @@ class FaceSwapper:
         frame = paste_back(frame, out.round().clip(0, 255).astype(np.uint8), mask, m)
         if self.enhancer is not None:
             frame = self._enhance(frame, kps)
+        if self.hair is not None:
+            frame = self.hair.apply(frame, t, track_id, kps)
         return frame
+
+
+class HairRecolor:
+    """Natural hair colour change: BiSeNet face parsing (class 17 = hair, 2/3 = eyebrows) on an
+    FFHQ-aligned 512 crop, then a Lab-space shift that keeps the original lightness texture
+    (strands, highlights) and only moves chroma; the mask is smoothed over time per track."""
+
+    HAIR, BROWS = 17, (2, 3)
+
+    def __init__(self, color: str, strength: float = 0.9):
+        self.c = HAIR_COLORS[color]
+        self.strength = strength
+        self.sess = session(face_model_path("bisenet_resnet_34"))
+        self.prev: dict[int, tuple[int, np.ndarray]] = {}
+
+    def mask(self, crop: np.ndarray) -> np.ndarray:
+        x = crop[:, :, ::-1].astype(np.float32) / 255.0
+        x = (x - np.array([0.485, 0.456, 0.406], np.float32)) / np.array([0.229, 0.224, 0.225], np.float32)
+        y = self.sess.run(None, {self.sess.get_inputs()[0].name: x.transpose(2, 0, 1)[None]})[0][0]
+        lab = y.argmax(0)
+        m = (lab == self.HAIR).astype(np.float32) + 0.6 * np.isin(lab, self.BROWS).astype(np.float32)
+        return cv2.resize(m, crop.shape[:2][::-1])
+
+    def apply(self, frame: np.ndarray, t: int, track_id: int, kps: np.ndarray) -> np.ndarray:
+        crop, m = warp(frame, kps, "ffhq_512", 512)
+        mask = self.mask(crop)
+        prev = self.prev.get(track_id)
+        if prev is not None and t - prev[0] == 1:
+            mask = 0.6 * mask + 0.4 * prev[1]
+        self.prev[track_id] = (t, mask)
+        hair_px = mask > 0.5
+        if hair_px.sum() < 50:
+            return frame
+        # recolor statistics from hair pixels only
+        lab = cv2.cvtColor(crop, cv2.COLOR_BGR2LAB).astype(np.float32)
+        med = float(np.median(lab[..., 0][hair_px]))
+        target = 118.0 * self.c["l"] + 20
+        L2 = (lab[..., 0] - med) * 1.0 + target  # keep full strand contrast
+        sat = np.clip(L2 / 140.0, 0.35, 1.1)
+        lab[..., 0] = np.clip(L2, 0, 255)
+        lab[..., 1] = 128 + self.c["a"] * sat + (lab[..., 1] - 128) * 0.25
+        lab[..., 2] = 128 + self.c["b"] * sat + (lab[..., 2] - 128) * 0.25
+        colored = cv2.cvtColor(lab.clip(0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+        soft = cv2.GaussianBlur(mask, (0, 0), 3).clip(0, 1) * self.strength
+        edge = box_mask(512, 0.15)  # fade at crop borders so the paste has no seams
+        return paste_back(frame, colored, np.minimum(soft, edge), m)

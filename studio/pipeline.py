@@ -43,7 +43,7 @@ class Busy(RuntimeError):
 
 class Project:
     FACE_KEYS = ["swapper", "pixel_boost", "face_weight", "enhancer_blend", "occlusion_mask", "mask_blur",
-                 "deflicker", "landmark_smoothing", "label_text", "label_position", "crf"]
+                 "deflicker", "landmark_smoothing", "label_text", "label_position", "crf", "hair_color", "hair_strength"]
     VOICE_KEYS = ["vc_steps", "vc_cfg_rate", "vc_keep_intonation", "vc_semitones"]
 
     def __init__(self, root: Path | None = None):

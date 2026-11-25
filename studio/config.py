@@ -35,6 +35,17 @@ FACE_MODELS = {
     # helpers
     "gfpgan_1.4": {"url": f"{FF}/models-3.0.0/gfpgan_1.4.onnx", "license": "Apache-2.0"},
     "xseg_1": {"url": f"{FF}/models-3.1.0/xseg_1.onnx", "license": "GPL-3.0 (DeepFaceLab XSeg)"},
+    "bisenet_resnet_34": {"url": f"{FF}/models-3.0.0/bisenet_resnet_34.onnx", "license": "MIT (face-parsing.PyTorch)"},
+}
+# Natural hair shades as CIE Lab (OpenCV 8-bit) chroma offsets + lightness factor.
+HAIR_COLORS = {
+    "ginger": {"a": 19, "b": 27, "l": 0.85},       # natural red / рыжий
+    "copper": {"a": 32, "b": 34, "l": 0.72},
+    "auburn": {"a": 24, "b": 18, "l": 0.55},
+    "chestnut": {"a": 10, "b": 18, "l": 0.50},
+    "dark_brown": {"a": 5, "b": 9, "l": 0.38},
+    "black": {"a": 1, "b": 2, "l": 0.22},
+    "blonde": {"a": 3, "b": 26, "l": 1.0},
 }
 SWAPPER_CHOICES = ["hyperswap_1a_256", "hyperswap_1b_256", "hyperswap_1c_256", "inswapper_128_fp16"]
 
@@ -66,6 +77,8 @@ DEFAULT_SETTINGS = {
     "deflicker": 0.5,           # 0..1 temporal stabilisation strength
     "landmark_smoothing": 2,    # Savitzky-Golay half-window (frames); 0 = off
     "min_face_px": 40,
+    "hair_color": None,         # None or a key of HAIR_COLORS (e.g. "ginger"); usually set per character
+    "hair_strength": 0.9,
     "det_thresh": 0.35,         # lower = finds faces partly outside the frame / in profile
     # voices
     "vc_steps": 30,
